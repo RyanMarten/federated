@@ -58,6 +58,7 @@ class SGD(optimizer.Optimizer):
   @tf.function
   def next(self, state, weights, gradients):
     optimizer.check_weights_gradients_match(weights, gradients)
+    gradients = tf.nest.map_structure(tf.convert_to_tensor, gradients)
     if self._momentum is None:
       updated_state = state
       updated_weights = tf.nest.map_structure(lambda w, g: w - self._lr * g,
