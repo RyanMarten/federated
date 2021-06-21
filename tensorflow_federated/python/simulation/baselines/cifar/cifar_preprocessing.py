@@ -21,6 +21,7 @@ import tensorflow as tf
 from tensorflow_federated.python.core.api import computation_base
 from tensorflow_federated.python.core.api import computations
 from tensorflow_federated.python.core.impl.types import computation_types
+from tensorflow_federated.python.simulation.baselines import client_spec
 
 CIFAR_SHAPE = (32, 32, 3)
 TOTAL_FEATURE_SIZE = 32 * 32 * 3
@@ -74,21 +75,21 @@ def build_image_map(
 
 
 def create_preprocess_fn(
-    num_epochs: int,
-    batch_size: int,
-    shuffle_buffer_size: int = NUM_EXAMPLES_PER_CLIENT,
+    preprocess_spec: client_spec.ClientSpec,
     crop_shape: Tuple[int, int, int] = CIFAR_SHAPE,
     distort_image=False,
     num_parallel_calls: int = tf.data.experimental.AUTOTUNE
 ) -> computation_base.Computation:
   """Creates a preprocessing function for CIFAR-100 client datasets.
 
+  The preprocessing shuffles, repeats, batches, and then reshapes, using
+  the `shuffle`, `take`, `repeat`, `map`, and `batch` attributes of a
+  `tf.data.Dataset`, in that order. The `map` function involves cropping
+  images to the size `crop_shape`.
+
   Args:
-    num_epochs: An integer representing the number of epochs to repeat the
-      client datasets.
-    batch_size: An integer representing the batch size on clients.
-    shuffle_buffer_size: An integer representing the shuffle buffer size on
-      clients. If set to a number <= 1, no shuffling occurs.
+    preprocess_spec: A `tff.simulation.baselines.ClientSpec` containing
+      information on how to preprocess clients.
     crop_shape: A tuple (crop_height, crop_width, num_channels) specifying the
       desired crop shape for pre-processing. This tuple cannot have elements
       exceeding (32, 32, 3), element-wise. The element in the last index should
@@ -106,14 +107,16 @@ def create_preprocess_fn(
     ValueError: If `num_epochs` is a non-positive integer, if `crop_shape` is
       iterable but not length 3.
   """
-  if num_epochs < 1:
-    raise ValueError('num_epochs must be a positive integer.')
   if not isinstance(crop_shape, collections.abc.Iterable):
     raise TypeError('Argument crop_shape must be an iterable.')
   crop_shape = tuple(crop_shape)
   if len(crop_shape) != 3:
     raise ValueError('The crop_shape must have length 3, corresponding to a '
                      'tensor of shape [height, width, channels].')
+
+  shuffle_buffer_size = preprocess_spec.shuffle_buffer_size
+  if shuffle_buffer_size is None:
+    shuffle_buffer_size = NUM_EXAMPLES_PER_CLIENT
 
   # Features are intentionally sorted lexicographically by key for consistency
   # across datasets.
@@ -128,12 +131,14 @@ def create_preprocess_fn(
   def preprocess_fn(dataset):
     if shuffle_buffer_size > 1:
       dataset = dataset.shuffle(shuffle_buffer_size)
-    return (
-        dataset.repeat(num_epochs)
-        # We map before batching to ensure that the cropping occurs
-        # at an image level (eg. we do not perform the same crop on
-        # every image within a batch)
-        .map(image_map_fn,
-             num_parallel_calls=num_parallel_calls).batch(batch_size))
+    if preprocess_spec.num_epochs > 1:
+      dataset = dataset.repeat(preprocess_spec.num_epochs)
+    if preprocess_spec.max_elements is not None:
+      dataset = dataset.take(preprocess_spec.max_elements)
+    # We map before batching to ensure that the cropping occurs
+    # at an image level (eg. we do not perform the same crop on
+    # every image within a batch)
+    dataset = dataset.map(image_map_fn, num_parallel_calls=num_parallel_calls)
+    return dataset.batch(preprocess_spec.batch_size)
 
   return preprocess_fn

@@ -14,12 +14,13 @@
 """Library for creating baseline tasks on EMNIST."""
 
 import enum
-from typing import Callable, Optional, Tuple, Union
+from typing import Callable, Optional, Union
 
 import tensorflow as tf
 
 from tensorflow_federated.python.learning import keras_utils
 from tensorflow_federated.python.learning import model
+from tensorflow_federated.python.simulation.baselines import baseline_task
 from tensorflow_federated.python.simulation.baselines import client_spec
 from tensorflow_federated.python.simulation.baselines import task_data
 from tensorflow_federated.python.simulation.baselines.emnist import emnist_models
@@ -63,33 +64,12 @@ def _get_digit_recognition_model(model_id: Union[str, DigitRecognitionModel],
   return keras_model
 
 
-def _get_preprocessing_functions(
-    train_client_spec: client_spec.ClientSpec,
-    eval_client_spec: client_spec.ClientSpec,
-    emnist_task: str) -> Tuple[_PreprocessFn, _PreprocessFn]:
-  """Creates train and eval preprocessing functions for an EMNIST task."""
-  train_preprocess_fn = emnist_preprocessing.create_preprocess_fn(
-      num_epochs=train_client_spec.num_epochs,
-      batch_size=train_client_spec.batch_size,
-      max_elements=train_client_spec.max_elements,
-      shuffle_buffer_size=train_client_spec.shuffle_buffer_size,
-      emnist_task=emnist_task)
-  eval_preprocess_fn = emnist_preprocessing.create_preprocess_fn(
-      num_epochs=eval_client_spec.num_epochs,
-      batch_size=eval_client_spec.batch_size,
-      max_elements=eval_client_spec.max_elements,
-      shuffle_buffer_size=eval_client_spec.shuffle_buffer_size,
-      emnist_task=emnist_task)
-  return train_preprocess_fn, eval_preprocess_fn
-
-
 def create_digit_recognition_task(
     train_client_spec: client_spec.ClientSpec,
     eval_client_spec: Optional[client_spec.ClientSpec] = None,
     model_id: Union[str, DigitRecognitionModel] = 'cnn_dropout',
     only_digits: bool = False,
-    use_synthetic_data: bool = False
-) -> Tuple[task_data.BaselineTaskDatasets, _ModelFn]:
+    use_synthetic_data: bool = False) -> baseline_task.BaselineTask:
   """Creates a baseline task for digit recognition on EMNIST.
 
   The goal of the task is to minimize the sparse categorical crossentropy
@@ -130,8 +110,7 @@ def create_digit_recognition_task(
       avoid downloading the entire EMNIST dataset.
 
   Returns:
-    A `tff.simulation.baselines.BaselineTaskDatasets` and a no-arg callable
-      returning a `tff.learning.Model`.
+    A `tff.simulation.baselines.BaselineTask`.
   """
   if use_synthetic_data:
     synthetic_data = emnist.get_synthetic()
@@ -139,12 +118,17 @@ def create_digit_recognition_task(
     emnist_test = synthetic_data
   else:
     emnist_train, emnist_test = emnist.load_data(only_digits=only_digits)
+  emnist_task = 'digit_recognition'
 
   if eval_client_spec is None:
     eval_client_spec = client_spec.ClientSpec(
         num_epochs=1, batch_size=64, shuffle_buffer_size=1)
-  train_preprocess_fn, eval_preprocess_fn = _get_preprocessing_functions(
-      train_client_spec, eval_client_spec, 'digit_recognition')
+
+  train_preprocess_fn = emnist_preprocessing.create_preprocess_fn(
+      train_client_spec, emnist_task=emnist_task)
+  eval_preprocess_fn = emnist_preprocessing.create_preprocess_fn(
+      eval_client_spec, emnist_task=emnist_task)
+
   task_datasets = task_data.BaselineTaskDatasets(
       train_data=emnist_train,
       test_data=emnist_test,
@@ -163,15 +147,14 @@ def create_digit_recognition_task(
         input_spec=task_datasets.element_type_structure,
         metrics=metrics)
 
-  return task_datasets, model_fn
+  return baseline_task.BaselineTask(task_datasets, model_fn)
 
 
 def create_autoencoder_task(
     train_client_spec: client_spec.ClientSpec,
     eval_client_spec: Optional[client_spec.ClientSpec] = None,
     only_digits: bool = False,
-    use_synthetic_data: bool = False
-) -> Tuple[task_data.BaselineTaskDatasets, _ModelFn]:
+    use_synthetic_data: bool = False) -> baseline_task.BaselineTask:
   """Creates a baseline task for autoencoding on EMNIST.
 
   This task involves performing autoencoding on the EMNIST dataset using a
@@ -198,8 +181,7 @@ def create_autoencoder_task(
       avoid downloading the entire EMNIST dataset.
 
   Returns:
-    A `tff.simulation.baselines.BaselineTaskDatasets` and a no-arg callable
-      returning a `tff.learning.Model`.
+    A `tff.simulation.baselines.BaselineTask`.
   """
   if use_synthetic_data:
     synthetic_data = emnist.get_synthetic()
@@ -207,12 +189,16 @@ def create_autoencoder_task(
     emnist_test = synthetic_data
   else:
     emnist_train, emnist_test = emnist.load_data(only_digits=only_digits)
+  emnist_task = 'autoencoder'
 
   if eval_client_spec is None:
     eval_client_spec = client_spec.ClientSpec(
         num_epochs=1, batch_size=64, shuffle_buffer_size=1)
-  train_preprocess_fn, eval_preprocess_fn = _get_preprocessing_functions(
-      train_client_spec, eval_client_spec, 'autoencoder')
+
+  train_preprocess_fn = emnist_preprocessing.create_preprocess_fn(
+      train_client_spec, emnist_task=emnist_task)
+  eval_preprocess_fn = emnist_preprocessing.create_preprocess_fn(
+      eval_client_spec, emnist_task=emnist_task)
   task_datasets = task_data.BaselineTaskDatasets(
       train_data=emnist_train,
       test_data=emnist_test,
@@ -234,4 +220,4 @@ def create_autoencoder_task(
         input_spec=task_datasets.element_type_structure,
         metrics=metrics)
 
-  return task_datasets, model_fn
+  return baseline_task.BaselineTask(task_datasets, model_fn)

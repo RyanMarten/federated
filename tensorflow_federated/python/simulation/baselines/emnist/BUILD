@@ -42,6 +42,7 @@ py_library(
         "//tensorflow_federated/python/core/api:computation_base",
         "//tensorflow_federated/python/core/api:computations",
         "//tensorflow_federated/python/core/impl/types:computation_types",
+        "//tensorflow_federated/python/simulation/baselines:client_spec",
     ],
 )
 
@@ -54,6 +55,7 @@ py_test(
     deps = [
         ":emnist_preprocessing",
         "//tensorflow_federated/python/core/backends/native:execution_contexts",
+        "//tensorflow_federated/python/simulation/baselines:client_spec",
     ],
 )
 
@@ -66,6 +68,7 @@ py_library(
         ":emnist_preprocessing",
         "//tensorflow_federated/python/learning:keras_utils",
         "//tensorflow_federated/python/learning:model",
+        "//tensorflow_federated/python/simulation/baselines:baseline_task",
         "//tensorflow_federated/python/simulation/baselines:client_spec",
         "//tensorflow_federated/python/simulation/baselines:task_data",
         "//tensorflow_federated/python/simulation/datasets:emnist",
@@ -80,8 +83,7 @@ py_test(
     deps = [
         ":emnist_tasks",
         "//tensorflow_federated/python/core/backends/native:execution_contexts",
-        "//tensorflow_federated/python/learning:model",
+        "//tensorflow_federated/python/simulation/baselines:baseline_task",
         "//tensorflow_federated/python/simulation/baselines:client_spec",
-        "//tensorflow_federated/python/simulation/baselines:task_data",
     ],
 )

@@ -18,6 +18,7 @@ from absl.testing import parameterized
 import tensorflow as tf
 
 from tensorflow_federated.python.core.backends.native import execution_contexts
+from tensorflow_federated.python.simulation.baselines import client_spec
 from tensorflow_federated.python.simulation.baselines.cifar import cifar_preprocessing
 
 
@@ -34,21 +35,17 @@ def _compute_length_of_dataset(ds):
 
 class PreprocessFnTest(tf.test.TestCase, parameterized.TestCase):
 
-  def test_preprocess_fn_with_negative_epochs_raises(self):
-    with self.assertRaisesRegex(ValueError,
-                                'num_epochs must be a positive integer'):
-      cifar_preprocessing.create_preprocess_fn(num_epochs=-2, batch_size=1)
-
   def test_raises_non_iterable_crop(self):
+    preprocess_spec = client_spec.ClientSpec(num_epochs=1, batch_size=1)
     with self.assertRaisesRegex(TypeError, 'crop_shape must be an iterable'):
-      cifar_preprocessing.create_preprocess_fn(
-          num_epochs=1, batch_size=1, crop_shape=32)
+      cifar_preprocessing.create_preprocess_fn(preprocess_spec, crop_shape=32)
 
   def test_raises_iterable_length_2_crop(self):
+    preprocess_spec = client_spec.ClientSpec(num_epochs=1, batch_size=1)
     with self.assertRaisesRegex(ValueError,
                                 'The crop_shape must have length 3'):
       cifar_preprocessing.create_preprocess_fn(
-          num_epochs=1, batch_size=1, crop_shape=(32, 32))
+          preprocess_spec, crop_shape=(32, 32))
 
   @parameterized.named_parameters(
       ('num_epochs_1_batch_size_1', 1, 1),
@@ -61,8 +58,9 @@ class PreprocessFnTest(tf.test.TestCase, parameterized.TestCase):
   def test_ds_length_is_ceil_num_epochs_over_batch_size(self, num_epochs,
                                                         batch_size):
     ds = tf.data.Dataset.from_tensor_slices(TEST_DATA)
-    preprocess_fn = cifar_preprocessing.create_preprocess_fn(
-        num_epochs=num_epochs, batch_size=batch_size, shuffle_buffer_size=1)
+    preprocess_spec = client_spec.ClientSpec(
+        num_epochs=num_epochs, batch_size=batch_size)
+    preprocess_fn = cifar_preprocessing.create_preprocess_fn(preprocess_spec)
     preprocessed_ds = preprocess_fn(ds)
     self.assertEqual(
         _compute_length_of_dataset(preprocessed_ds),
@@ -79,12 +77,10 @@ class PreprocessFnTest(tf.test.TestCase, parameterized.TestCase):
   def test_preprocess_fn_returns_correct_element(self, crop_shape,
                                                  distort_image):
     ds = tf.data.Dataset.from_tensor_slices(TEST_DATA)
+    preprocess_spec = client_spec.ClientSpec(
+        num_epochs=1, batch_size=1, shuffle_buffer_size=1)
     preprocess_fn = cifar_preprocessing.create_preprocess_fn(
-        num_epochs=1,
-        batch_size=1,
-        shuffle_buffer_size=1,
-        crop_shape=crop_shape,
-        distort_image=distort_image)
+        preprocess_spec, crop_shape=crop_shape, distort_image=distort_image)
     preprocessed_ds = preprocess_fn(ds)
     expected_element_spec_shape = (None,) + crop_shape
     self.assertEqual(
@@ -110,6 +106,24 @@ class PreprocessFnTest(tf.test.TestCase, parameterized.TestCase):
     self.assertEqual(cropped_example[0].shape, crop_shape)
     self.assertAllClose(x, cropped_example[0], rtol=1e-03)
     self.assertEqual(cropped_example[1], 0)
+
+  @parameterized.named_parameters(
+      ('max_elements1', 1),
+      ('max_elements3', 3),
+      ('max_elements7', 7),
+      ('max_elements11', 11),
+      ('max_elements18', 18),
+  )
+  def test_ds_length_with_max_elements(self, max_elements):
+    repeat_size = 10
+    ds = tf.data.Dataset.from_tensor_slices(TEST_DATA).repeat(repeat_size)
+    preprocess_spec = client_spec.ClientSpec(
+        num_epochs=1, batch_size=1, max_elements=max_elements)
+    preprocess_fn = cifar_preprocessing.create_preprocess_fn(preprocess_spec)
+    preprocessed_ds = preprocess_fn(ds)
+    self.assertEqual(
+        _compute_length_of_dataset(preprocessed_ds),
+        min(repeat_size, max_elements))
 
 
 if __name__ == '__main__':
