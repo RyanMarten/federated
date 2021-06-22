@@ -22,8 +22,10 @@ import tensorflow as tf
 from tensorflow_federated.python.core.api import computation_base
 from tensorflow_federated.python.core.api import computations
 from tensorflow_federated.python.core.impl.types import computation_types
+from tensorflow_federated.python.simulation.baselines import client_spec
 
-EVAL_BATCH_SIZE = 100
+DEFAULT_SEQUENCE_LENGTH = 20
+DEFAULT_SHUFFLE_BUFFER_SIZE = 1000
 
 
 @attr.s(eq=False, frozen=True)
@@ -105,68 +107,50 @@ def get_special_tokens(vocab_size: int,
 
 
 def create_preprocess_fn(
-    num_epochs: int,
-    batch_size: int,
+    preprocess_spec: client_spec.ClientSpec,
     vocab: List[str],
-    sequence_length: int,
+    sequence_length: int = DEFAULT_SEQUENCE_LENGTH,
     num_oov_buckets: int = 1,
-    max_elements: int = -1,
-    shuffle_buffer_size: int = 1000,
     num_parallel_calls: int = tf.data.experimental.AUTOTUNE
 ) -> computation_base.Computation:
   """Creates a preprocessing functions for Stack Overflow next-word-prediction.
 
   This function returns a `tff.Computation` which takes a dataset and returns a
-  dataset, suitable for mapping over a set of unprocessed client datasets.
+  dataset, suitable for mapping over a set of unprocessed client datasets. This
+  dataset is formed by mapping datasets of string sequences to token sequences.
+
+  Specifically, the dataset is first shuffled, then repeated some number of
+  times, and a maximum number of elements are taken. We then map these elements
+  to token sequences, and batch the token sequences.
 
   Args:
-    num_epochs: An integer representing the number of epochs to repeat the
-      client datasets.
-    batch_size: An integer representing the batch size on clients.
-    vocab: Vocabulary which defines the embedding.
-    sequence_length: Integer determining the length of preprocessed batches.
-      Sequences of word tokens will be padded up to this length with a pad token
-      and sequences longer than this will be truncated to this length.
+    preprocess_spec: A `tff.simulation.baselines.ClientSpec` containing
+        information on how to preprocess clients.
+    vocab: A list of string values representing the vocabulary for the
+      string-to-token conversion.
+    sequence_length: A positive integer determining the length of preprocessed
+      token sequences. Sequences of word tokens will be padded up to this length
+      with a pad token and sequences longer than this will be truncated to this
+      length.
     num_oov_buckets: The number of out of vocabulary buckets. Tokens that are
       not present in the `vocab` are hashed into one of these buckets.
-    max_elements: Integer controlling the maximum number of elements
-      to take per client. If -1, keeps all elements for each client. This is
-      applied before repeating the client dataset, and is intended to contend
-      with the small set of clients with tens of thousands of examples. Note
-      that only the first `max_elements` will be selected.
-    shuffle_buffer_size: An integer representing the shuffle buffer size on
-      clients. If set to a number <= 1, no shuffling occurs. If
-      `max_elements_per_client` is positive and less than `shuffle_buffer_size`,
-      it will be set to `max_elements_per_client`.
     num_parallel_calls: An integer representing the number of parallel calls
       used when performing `tf.data.Dataset.map`.
 
   Returns:
     A `tff.Computation` taking as input a `tf.data.Dataset`, and returning a
     `tf.data.Dataset` formed by preprocessing according to the input arguments.
-
-  Raises:
-    ValueError: If `num_epochs` is a non-positive integer, if `batch_size` is
-      not a positive integer, if `sequence_length` is not a positive integer, if
-      `vocab` is empty, if `num_oov_buckets` is not a positive integer, if
-      `max_elements` is not a positive integer or -1, if `sequence_length`
-      is not a positive integer.
   """
-  if num_epochs <= 0:
-    raise ValueError('num_epochs must be a positive integer. ')
-  if batch_size <= 0:
-    raise ValueError('batch_size must be a positive integer.')
   if not vocab:
     raise ValueError('vocab must be non-empty.')
   if sequence_length < 1:
     raise ValueError('sequence_length must be a positive integer.')
-  if max_elements == 0 or max_elements < -1:
-    raise ValueError('max_elements must be a positive integer or -1.')
   if num_oov_buckets <= 0:
     raise ValueError('num_oov_buckets must be a positive integer.')
 
-  if (max_elements > 0) and (max_elements < shuffle_buffer_size):
-    shuffle_buffer_size = max_elements
+  shuffle_buffer_size = preprocess_spec.shuffle_buffer_size
+  if shuffle_buffer_size is None:
+    shuffle_buffer_size = DEFAULT_SHUFFLE_BUFFER_SIZE
 
   # Features are intentionally sorted lexicographically by key for consistency
   # across datasets.
@@ -185,11 +169,13 @@ def create_preprocess_fn(
         vocab=vocab,
         max_sequence_length=sequence_length,
         num_oov_buckets=num_oov_buckets)
-    dataset = dataset.take(max_elements)
-    if shuffle_buffer_size > 0:
+    if shuffle_buffer_size > 1:
       dataset = dataset.shuffle(shuffle_buffer_size)
-    dataset = dataset.repeat(num_epochs).map(
-        to_ids, num_parallel_calls=num_parallel_calls)
-    return batch_and_split(dataset, sequence_length, batch_size)
+    if preprocess_spec.num_epochs > 1:
+      dataset = dataset.repeat(preprocess_spec.num_epochs)
+    if preprocess_spec.max_elements is not None:
+      dataset = dataset.take(preprocess_spec.max_elements)
+    dataset = dataset.map(to_ids, num_parallel_calls=num_parallel_calls)
+    return batch_and_split(dataset, sequence_length, preprocess_spec.batch_size)
 
   return preprocess_fn

@@ -17,6 +17,7 @@ from absl.testing import parameterized
 import tensorflow as tf
 
 from tensorflow_federated.python.core.backends.native import execution_contexts
+from tensorflow_federated.python.simulation.baselines import client_spec
 from tensorflow_federated.python.simulation.baselines.stackoverflow import word_prediction_preprocessing
 
 
@@ -129,68 +130,43 @@ class BatchAndSplitTest(tf.test.TestCase):
 
 class PreprocessFnTest(tf.test.TestCase, parameterized.TestCase):
 
-  def test_preprocess_fn_with_negative_epochs_raises(self):
-    with self.assertRaisesRegex(ValueError,
-                                'num_epochs must be a positive integer'):
-      word_prediction_preprocessing.create_preprocess_fn(
-          num_epochs=-2, batch_size=1, vocab=['A'], sequence_length=10)
-
-  def test_preprocess_fn_with_negative_batch_raises(self):
-    with self.assertRaisesRegex(ValueError,
-                                'batch_size must be a positive integer'):
-      word_prediction_preprocessing.create_preprocess_fn(
-          num_epochs=1, batch_size=-10, vocab=['A'], sequence_length=10)
-
   def test_preprocess_fn_with_empty_vocab_raises(self):
+    preprocess_spec = client_spec.ClientSpec(num_epochs=1, batch_size=1)
     with self.assertRaisesRegex(ValueError, 'vocab must be non-empty'):
       word_prediction_preprocessing.create_preprocess_fn(
-          num_epochs=1, batch_size=1, vocab=[], sequence_length=10)
+          preprocess_spec, vocab=[], sequence_length=10)
 
-  def test_preprocess_fn_with_negative_sequence_length(self):
+  @parameterized.named_parameters(('zero_value', 0), ('negative_value1', -1),
+                                  ('negative_value2', -2))
+  def test_nonpositive_sequence_length_raises(self, sequence_length):
+    preprocess_spec = client_spec.ClientSpec(num_epochs=1, batch_size=1)
     with self.assertRaisesRegex(ValueError,
                                 'sequence_length must be a positive integer'):
       word_prediction_preprocessing.create_preprocess_fn(
-          num_epochs=1, batch_size=1, vocab=['A'], sequence_length=0)
+          preprocess_spec, vocab=['A'], sequence_length=0)
 
-  def test_preprocess_fn_with_zero_or_less_neg1_max_elements_raises(self):
-    with self.assertRaisesRegex(
-        ValueError, 'max_elements must be a positive integer or -1'):
-      word_prediction_preprocessing.create_preprocess_fn(
-          num_epochs=1,
-          batch_size=1,
-          vocab=['A'],
-          sequence_length=10,
-          max_elements=-2)
-
-    with self.assertRaisesRegex(
-        ValueError, 'max_elements must be a positive integer or -1'):
-      word_prediction_preprocessing.create_preprocess_fn(
-          num_epochs=1,
-          batch_size=1,
-          vocab=['A'],
-          sequence_length=10,
-          max_elements=0)
-
-  def test_preprocess_fn_with_negative_num_oov_buckets_raises(self):
+  @parameterized.named_parameters(('zero_value', 0), ('negative_value1', -1),
+                                  ('negative_value2', -2))
+  def test_nonpositive_num_oov_buckets_length_raises(self, num_oov_buckets):
+    preprocess_spec = client_spec.ClientSpec(num_epochs=1, batch_size=1)
     with self.assertRaisesRegex(ValueError,
                                 'num_oov_buckets must be a positive integer'):
       word_prediction_preprocessing.create_preprocess_fn(
-          num_epochs=1,
-          batch_size=1,
+          preprocess_spec,
           vocab=['A'],
           sequence_length=10,
-          num_oov_buckets=-1)
+          num_oov_buckets=num_oov_buckets)
 
   @parameterized.named_parameters(('param1', 1, 1), ('param2', 4, 2),
                                   ('param3', 100, 3))
   def test_preprocess_fn_returns_correct_dataset_element_spec(
       self, sequence_length, num_oov_buckets):
     ds = tf.data.Dataset.from_tensor_slices(TEST_DATA)
+    preprocess_spec = client_spec.ClientSpec(
+        num_epochs=1, batch_size=32, max_elements=100)
     preprocess_fn = word_prediction_preprocessing.create_preprocess_fn(
-        batch_size=32,
-        num_epochs=1,
+        preprocess_spec,
         sequence_length=sequence_length,
-        max_elements=100,
         vocab=['one', 'must'],
         num_oov_buckets=num_oov_buckets)
     preprocessed_ds = preprocess_fn(ds)
@@ -201,11 +177,11 @@ class PreprocessFnTest(tf.test.TestCase, parameterized.TestCase):
 
   def test_preprocess_fn_returns_correct_sequence_with_1_oov_bucket(self):
     ds = tf.data.Dataset.from_tensor_slices(TEST_DATA)
+    preprocess_spec = client_spec.ClientSpec(
+        num_epochs=1, batch_size=32, max_elements=100)
     preprocess_fn = word_prediction_preprocessing.create_preprocess_fn(
-        batch_size=32,
-        num_epochs=1,
+        preprocess_spec,
         sequence_length=6,
-        max_elements=100,
         vocab=['one', 'must'],
         num_oov_buckets=1)
 
@@ -219,11 +195,11 @@ class PreprocessFnTest(tf.test.TestCase, parameterized.TestCase):
 
   def test_preprocess_fn_returns_correct_sequence_with_3_oov_buckets(self):
     ds = tf.data.Dataset.from_tensor_slices(TEST_DATA)
+    preprocess_spec = client_spec.ClientSpec(
+        num_epochs=1, batch_size=32, max_elements=100)
     preprocess_fn = word_prediction_preprocessing.create_preprocess_fn(
-        batch_size=32,
-        num_epochs=1,
+        preprocess_spec,
         sequence_length=6,
-        max_elements=100,
         vocab=['one', 'must'],
         num_oov_buckets=3)
     preprocessed_ds = preprocess_fn(ds)
@@ -250,16 +226,33 @@ class PreprocessFnTest(tf.test.TestCase, parameterized.TestCase):
   def test_ds_length_is_ceil_num_epochs_over_batch_size(self, num_epochs,
                                                         batch_size):
     ds = tf.data.Dataset.from_tensor_slices(TEST_DATA)
+    preprocess_spec = client_spec.ClientSpec(
+        num_epochs=num_epochs, batch_size=batch_size)
     preprocess_fn = word_prediction_preprocessing.create_preprocess_fn(
-        num_epochs=num_epochs,
-        batch_size=batch_size,
-        vocab=['A'],
-        sequence_length=10,
-        shuffle_buffer_size=1)
+        preprocess_spec, vocab=['A'], sequence_length=10)
     preprocessed_ds = preprocess_fn(ds)
     self.assertEqual(
         _compute_length_of_dataset(preprocessed_ds),
         tf.cast(tf.math.ceil(num_epochs / batch_size), tf.int32))
+
+  @parameterized.named_parameters(
+      ('max_elements1', 1),
+      ('max_elements3', 3),
+      ('max_elements7', 7),
+      ('max_elements11', 11),
+      ('max_elements18', 18),
+  )
+  def test_ds_length_with_max_elements(self, max_elements):
+    repeat_size = 10
+    ds = tf.data.Dataset.from_tensor_slices(TEST_DATA)
+    preprocess_spec = client_spec.ClientSpec(
+        num_epochs=repeat_size, batch_size=1, max_elements=max_elements)
+    preprocess_fn = word_prediction_preprocessing.create_preprocess_fn(
+        preprocess_spec, vocab=['A'])
+    preprocessed_ds = preprocess_fn(ds)
+    self.assertEqual(
+        _compute_length_of_dataset(preprocessed_ds),
+        min(repeat_size, max_elements))
 
 
 if __name__ == '__main__':

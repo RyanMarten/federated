@@ -21,14 +21,15 @@ import tensorflow as tf
 from tensorflow_federated.python.core.api import computation_base
 from tensorflow_federated.python.core.api import computations
 from tensorflow_federated.python.core.impl.types import computation_types
+from tensorflow_federated.python.simulation.baselines import client_spec
 
-SEQUENCE_LENGTH = 80  # from McMahan et al AISTATS 2017
+DEFAULT_SEQUENCE_LENGTH = 80  # from McMahan et al AISTATS 2017
 # Vocabulary re-used from the Federated Learning for Text Generation tutorial.
 # https://www.tensorflow.org/federated/tutorials/federated_learning_for_text_generation
 CHAR_VOCAB = list(
     'dhlptx@DHLPTX $(,048cgkoswCGKOSW[_#\'/37;?bfjnrvzBFJNRVZ"&*.26:\naeimquyAEIMQUY]!%)-159\r'
 )
-EVAL_BATCH_SIZE = 10
+DEFAULT_SHUFFLE_BUFFER_SIZE = 50
 
 
 def get_special_tokens() -> Tuple[int, int, int, int]:
@@ -46,7 +47,7 @@ def get_special_tokens() -> Tuple[int, int, int, int]:
   return pad, oov, bos, eos
 
 
-def _build_tokenize_fn(split_length: int = SEQUENCE_LENGTH + 1):
+def _build_tokenize_fn(split_length: int = DEFAULT_SEQUENCE_LENGTH + 1):
   """Create a tf.function that converts a Shakespeare example to character ids.
 
   The function converts each example to its corresponding character ids. It then
@@ -87,41 +88,35 @@ def _split_target(sequence_batch: tf.Tensor) -> Tuple[tf.Tensor, tf.Tensor]:
 
 
 def create_preprocess_fn(
-    num_epochs: int,
-    batch_size: int,
-    shuffle_buffer_size: int = 50,
-    sequence_length: int = SEQUENCE_LENGTH,
+    preprocess_spec: client_spec.ClientSpec,
+    sequence_length: int = DEFAULT_SEQUENCE_LENGTH,
     num_parallel_calls: int = tf.data.experimental.AUTOTUNE
 ) -> computation_base.Computation:
   """Creates a preprocessing function for Shakespeare client datasets.
 
   This function maps a dataset of string snippets to a dataset of input/output
-  character ID sequences. This is done by first repeating the dataset and
-  shuffling (according to `num_epochs` and `shuffle_buffer_size`), mapping
-  the the string sequences to tokens, and packing them into input/output
-  sequences of length `sequence_length`.
+  character ID sequences. This is done by shuffling and repeating the dataset,
+  taking some maximum number of string sequences, mapping the string sequences
+  to tokens, and packing them into input/output sequences of length
+  `sequence_length`. Finally, these token sequences are batched.
 
   Args:
-    num_epochs: An integer representing the number of epochs to repeat the
-      client datasets.
-    batch_size: An integer representing the batch size on clients.
-    shuffle_buffer_size: An integer representing the shuffle buffer size on
-      clients. If set to a number <= 1, no shuffling occurs.
-    sequence_length: the length of each example in the batch.
+    preprocess_spec: A `tff.simulation.baselines.ClientSpec` containing
+      information on how to preprocess clients.
+    sequence_length: A positive integer dictating the length of each example in
+      a client's dataset.
     num_parallel_calls: An integer representing the number of parallel calls
       used when performing `tf.data.Dataset.map`.
 
   Returns:
     A `tff.Computation` performing the preprocessing described above.
-
-  Raises:
-    ValueError: If `num_epochs` is a non-positive integer, if `sequence_length`
-      is a non-positive integer.
   """
-  if num_epochs < 1:
-    raise ValueError('num_epochs must be a positive integer.')
   if sequence_length < 1:
     raise ValueError('sequence_length must be a positive integer.')
+
+  shuffle_buffer_size = preprocess_spec.shuffle_buffer_size
+  if shuffle_buffer_size is None:
+    shuffle_buffer_size = DEFAULT_SHUFFLE_BUFFER_SIZE
 
   feature_dtypes = collections.OrderedDict(snippets=tf.string,)
 
@@ -129,20 +124,22 @@ def create_preprocess_fn(
   def preprocess_fn(dataset):
     if shuffle_buffer_size > 1:
       dataset = dataset.shuffle(shuffle_buffer_size)
+    if preprocess_spec.num_epochs > 1:
+      dataset = dataset.repeat(preprocess_spec.num_epochs)
+    if preprocess_spec.max_elements is not None:
+      dataset = dataset.take(preprocess_spec.max_elements)
+    # Convert snippets to int64 tokens and pad.
     to_tokens = _build_tokenize_fn(split_length=sequence_length + 1)
-    return (
-        dataset.repeat(num_epochs)
-        # Convert snippets to int64 tokens and pad.
-        .map(to_tokens, num_parallel_calls=num_parallel_calls)
-        # Separate into individual tokens
-        .unbatch()
-        # Join into sequences of the desired length. The previous call of
-        # map(to_ids,...) ensures that the collection of tokens has length
-        # divisible by sequence_length + 1, so no batch dropping is expected.
-        .batch(sequence_length + 1, drop_remainder=True)
-        # Batch sequences together for mini-batching purposes.
-        .batch(batch_size)
-        # Convert batches into training examples.
-        .map(_split_target, num_parallel_calls=num_parallel_calls))
+    dataset = dataset.map(to_tokens, num_parallel_calls=num_parallel_calls)
+    # Separate into individual tokens
+    dataset = dataset.unbatch()
+    # Join into sequences of the desired length. The previous call of
+    # map(to_ids,...) ensures that the collection of tokens has length
+    # divisible by sequence_length + 1, so no batch dropping is expected.
+    dataset = dataset.batch(sequence_length + 1, drop_remainder=True)
+    # Batch sequences together into mini-batches
+    dataset = dataset.batch(preprocess_spec.batch_size)
+    # Convert batches into training examples.
+    return dataset.map(_split_target, num_parallel_calls=num_parallel_calls)
 
   return preprocess_fn
